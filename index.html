@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SupabaseTube</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #0f0f0f; color: #fff; }
+        nav { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background-color: #212121; position: sticky; top: 0; z-index: 100; }
+        .logo { font-size: 22px; font-weight: bold; color: #00d1b2; text-decoration: none; }
+        .container { display: grid; grid-template-columns: 1.4fr 0.6fr; gap: 24px; max-width: 1400px; margin: 20px auto; padding: 0 20px; }
+        @media (max-width: 900px) { .container { grid-template-columns: 1fr; } }
+        .main-content { display: flex; flex-direction: column; gap: 15px; }
+        .player-wrapper { width: 100%; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; }
+        video { width: 100%; height: 100%; display: block; }
+        .video-details { background: #212121; padding: 20px; border-radius: 12px; }
+        .video-title { font-size: 22px; font-weight: 600; margin-bottom: 5px; }
+        .comments-section { background: #212121; padding: 20px; border-radius: 12px; }
+        .comment-form { display: flex; flex-direction: column; gap: 10px; margin: 15px 0 20px 0; }
+        .comment-inputs { display: flex; gap: 10px; }
+        input[type="text"], input[type="file"] { background: #313131; border: 1px solid #444; color: #fff; padding: 10px; border-radius: 6px; font-size: 14px; outline: none; width: 100%; }
+        input[type="text"]:focus { border-color: #00d1b2; }
+        #comment-author { width: 150px; }
+        #comment-text { flex: 1; }
+        button { background: #00d1b2; color: #0f0f0f; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #00b399; }
+        button:disabled { background: #555; color: #aaa; cursor: not-allowed; }
+        .comment-card { border-bottom: 1px solid #383838; padding: 12px 0; }
+        .comment-header { font-size: 13px; color: #aaa; font-weight: bold; margin-bottom: 4px; }
+        .comment-body { font-size: 14px; color: #eee; }
+        .sidebar { display: flex; flex-direction: column; gap: 20px; }
+        .panel { background: #212121; padding: 20px; border-radius: 12px; }
+        .panel h3 { margin-bottom: 15px; font-size: 18px; border-left: 4px solid #00d1b2; padding-left: 8px; }
+        .upload-form { display: flex; flex-direction: column; gap: 12px; }
+        .video-list { display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; }
+        .video-item { display: flex; gap: 12px; cursor: pointer; padding: 8px; border-radius: 8px; align-items: center; }
+        .video-item:hover { background: #313131; }
+        .video-item.active { background: #383838; border-left: 3px solid #00d1b2; }
+        .thumb-placeholder { width: 50px; height: 40px; background: #313131; display: flex; align-items: center; justify-content: center; font-size: 18px; border-radius: 6px; flex-shrink: 0; }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <a href="#" class="logo">⚡ SupabaseTube</a>
+        <div style="font-size: 14px; color: #aaa;">Hosting Directo y Permanente</div>
+    </nav>
+
+    <div class="container">
+        <div class="main-content">
+            <div class="player-wrapper">
+                <video id="video-player" controls autoplay></video>
+            </div>
+            <div class="video-details">
+                <h1 class="video-title" id="current-title">Selecciona o sube un video...</h1>
+            </div>
+            <div class="comments-section">
+                <h3>Comentarios (<span id="comments-count">0</span>)</h3>
+                <form class="comment-form" onsubmit="postComment(event)">
+                    <div class="comment-inputs">
+                        <input type="text" id="comment-author" placeholder="Tu nombre" required>
+                        <input type="text" id="comment-text" placeholder="Escribe un comentario público..." required>
+                    </div>
+                    <button type="submit" style="align-self: flex-end;">Comentar</button>
+                </form>
+                <div id="comments-container"></div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="panel">
+                <h3>Subir Video</h3>
+                <form class="upload-form" onsubmit="uploadVideo(event)">
+                    <input type="file" id="upload-file" accept="video/*" required>
+                    <button type="submit" id="upload-button">Publicar Video</button>
+                </form>
+            </div>
+            <div class="panel">
+                <h3>Videos Disponibles</h3>
+                <div class="video-list" id="playlist-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CONFIGURACIÓN DE SUPABASE
+        // REEMPLAZA ESTOS DATOS CON LOS DE TU PROYECTO (Settings -> API)
+        const SUPABASE_URL = "https://TU_PROYECTO_ID.supabase.co";
+        const SUPABASE_ANON_KEY = "TU_API_KEY_ANONIMA";
+
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let activeVideoName = null;
+
+        // 1. OBTENER LISTA DE VIDEOS DESDE EL STORAGE
+        async function loadVideos() {
+            const { data, error } = await supabase.storage.from('videos').list('', {
+                limit: 100,
+                sortBy: { column: 'created_at', order: 'desc' }
+            });
+
+            if (error) {
+                console.error("Error cargando videos:", error);
+                return;
+            }
+
+            const container = document.getElementById('playlist-container');
+            container.innerHTML = '';
+
+            if(data.length === 0) {
+                container.innerHTML = '<p style="color:#aaa; font-size:14px;">No hay videos. ¡Sube el primero!</p>';
+                return;
+            }
+
+            data.forEach(file => {
+                // Supabase a veces lista carpetas vacías o marcadores, los filtramos
+                if (file.name === '.emptyFolderPlaceholder') return;
+
+                const div = document.createElement('div');
+                div.className = `video-item ${file.name === activeVideoName ? 'active' : ''}`;
+                div.onclick = () => selectVideo(file.name);
+                div.innerHTML = `
+                    <div class="thumb-placeholder">🎬</div>
+                    <div style="font-size:14px; font-weight:500; word-break: break-word;">${file.name}</div>
+                `;
+                container.appendChild(div);
+            });
+
+            // Si hay videos y no hay ninguno seleccionado, reproduce el primero
+            if (data.length > 0 && !activeVideoName) {
+                const firstVideo = data.find(f => f.name !== '.emptyFolderPlaceholder');
+                if(firstVideo) selectVideo(firstVideo.name);
+            }
+        }
+
+        // 2. SELECCIONAR Y REPRODUCIR UN VIDEO
+        function selectVideo(fileName) {
+            activeVideoName = fileName;
+            
+            // Obtener la URL pública del archivo en el Storage
+            const { data } = supabase.storage.from('videos').getPublicUrl(fileName);
+            
+            document.getElementById('video-player').src = data.publicUrl;
+            document.getElementById('current-title').innerText = fileName;
+
+            // Cambiar clase activa visualmente
+            document.querySelectorAll('.video-item').forEach(el => el.classList.remove('active'));
+            loadComments(fileName);
+        }
+
+        // 3. SUBIR UN VIDEO AL STORAGE
+        async function uploadVideo(e) {
+            e.preventDefault();
+            const fileInput = document.getElementById('upload-file');
+            const button = document.getElementById('upload-button');
+            const file = fileInput.files[0];
+
+            if (!file) return;
+
+            button.innerText = 'Subiendo video...';
+            button.disabled = true;
+
+            // Usamos el nombre original del archivo asegurando que sea una ruta limpia
+            const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+
+            const { data, error } = await supabase.storage
+                .from('videos')
+                .upload(fileName, file);
+
+            if (error) {
+                alert('Error al subir: ' + error.message);
+            } else {
+                fileInput.value = '';
+                await loadVideos();
+                selectVideo(fileName);
+            }
+            button.innerText = 'Publicar Video';
+            button.disabled = false;
+        }
+
+        // 4. CARGAR COMENTARIOS DESDE LA TABLA
+        async function loadComments(videoName) {
+            const { data, error } = await supabase
+                .from('comentarios')
+                .select('*')
+                .eq('video_id', videoName)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                console.error(error);
+                return;
+            }
+
+            document.getElementById('comments-count').innerText = data.length;
+            const container = document.getElementById('comments-container');
+            container.innerHTML = '';
+
+            if (data.length === 0) {
+                container.innerHTML = `<p style="color: #aaa; font-size: 14px; padding: 10px 0;">Nadie ha comentado aún. ¡Sé el primero!</p>`;
+                return;
+            }
+
+            data.forEach(c => {
+                const date = new Date(c.created_at).toLocaleDateString();
+                const card = document.createElement('div');
+                card.className = 'comment-card';
+                card.innerHTML = `
+                    <div class="comment-header">${c.autor} <span style="font-weight:normal; font-size:11px; margin-left:8px; color:#666;">${date}</span></div>
+                    <div class="comment-body">${c.texto}</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // 5. PUBLICAR UN COMENTARIO EN LA TABLA
+        async function postComment(e) {
+            e.preventDefault();
+            if (!activeVideoName) return;
+
+            const authorInput = document.getElementById('comment-author');
+            const textInput = document.getElementById('comment-text');
+
+            const { error } = await supabase
+                .from('comentarios')
+                .insert([
+                    { video_id: activeVideoName, autor: authorInput.value, texto: textInput.value }
+                ]);
+
+            if (error) {
+                alert('Error al comentar: ' + error.message);
+            } else {
+                textInput.value = '';
+                loadComments(activeVideoName);
+            }
+        }
+
+        // Inicializar la app
+        loadVideos();
+    </script>
+</body>
+</html>
